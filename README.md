@@ -3,6 +3,11 @@ WebMSNP is a web-based client for the MSNP instant messaging protocol targeting 
 
 This repository contains the Rust-based source code for the server.
 
+## Servers
+As of right now, there is **1** website hosting this server:
+- https://webmsnp.kooper.online
+  - Hosted from my own machine; not 24/7 at the moment
+
 ## Building
 ### Prerequisites
 - The Rust programming language, download from [here](https://rust-lang.org/tools/install/).
@@ -26,3 +31,4 @@ If successful, there should now be a `build-rel` folder containing an executable
 Once compiled, you can launch the server executable to immediately start hosting on 0.0.0.0 port 27677.
 
 Make sure that port 27677 is not being blocked by your firewall or being used by another process.
+
