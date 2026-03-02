@@ -1,13 +1,28 @@
-Source code for WebMSNP
+# WebMSNP
+WebMSNP is a web-based client for the MSNP instant messaging protocol targeting at least iOS 6 WebKit!
 
-## How to build
-Linux:
-- `./build-release.sh`
-Windows:
-- Run build-release.ps1 (right click and press "Run with PowerShell")
-If successful, there should now be a `release-package` folder containing a compiled server exe
+This repository contains the Rust-based source code for the server.
+
+## Building
+### Prerequisites
+- The Rust programming language, download from [here](https://rust-lang.org/tools/install/).
+
+Once done, you can do the following:
+- Linux:
+  ```
+  git clone https://github.com/dskooper/webmsnp
+  cd webmsnp
+  ./build-release.sh
+  ```
+- Windows:
+  1. Download the entire repository by clicking on [this link](https://github.com/dskooper/webmsnp/archive/refs/heads/main.zip)
+  2. Extract the repository into a folder and enter it.
+  3. Right click on `build-release.ps1` and press on "Run with PowerShell`
+
+
+If successful, there should now be a `build-rel` folder containing an executable.
 
 ## Usage
-Once compiled, you can launch the execute to start hosting on 0.0.0.0 port 27677.
+Once compiled, you can launch the server executable to immediately start hosting on 0.0.0.0 port 27677.
 
 Make sure that port 27677 is not being blocked by your firewall or being used by another process.
