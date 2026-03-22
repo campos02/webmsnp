@@ -3,9 +3,7 @@ use crate::client_message::ClientMessage;
 use crate::server_message::ServerMessage;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use msnp11_sdk::{Client, Event, MsnpList, MsnpStatus, PersonalMessage, PlainText};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{error, info};
 
 pub async fn handle_client_message(
@@ -35,26 +33,18 @@ pub async fn handle_client_message(
             handle_set_personal_message(message, session_id, state).await
         }
         ClientMessage::AddContact { email } => handle_add_contact(email, session_id, state).await,
-        ClientMessage::RemoveContact { email } => {
-            handle_remove_contact(email, session_id, state).await
-        }
-        ClientMessage::BlockContact { email } => {
-            handle_block_contact(email, session_id, state).await
-        }
-        ClientMessage::UnblockContact { email } => {
-            handle_unblock_contact(email, session_id, state).await
-        }
+        ClientMessage::RemoveContact { email } => handle_remove_contact(email, state).await,
+        ClientMessage::BlockContact { email } => handle_block_contact(email, state).await,
+        ClientMessage::UnblockContact { email } => handle_unblock_contact(email, state).await,
         ClientMessage::StartConversation { email } => {
             handle_start_conversation(email, session_id, state).await
         }
         ClientMessage::SendMessage { email, message } => {
-            handle_send_message(email, message, session_id, state).await
+            handle_send_message(email, message, state).await
         }
-        ClientMessage::SendNudge { email } => handle_send_nudge(email, session_id, state).await,
-        ClientMessage::SendTyping { email } => handle_send_typing(email, session_id, state).await,
-        ClientMessage::CloseConversation { email } => {
-            handle_close_conversation(email, session_id, state).await
-        }
+        ClientMessage::SendNudge { email } => handle_send_nudge(email, state).await,
+        ClientMessage::SendTyping { email } => handle_send_typing(email, state).await,
+        ClientMessage::CloseConversation { email } => handle_close_conversation(email, state).await,
         ClientMessage::Logout => handle_logout(session_id, state).await,
     }
 }
@@ -99,17 +89,12 @@ async fn handle_login(
                 }
                 Ok(Event::Authenticated) => {
                     info!("[LOGIN] User {} successfully authenticated!", email);
-                    let client = Arc::new(Mutex::new(client));
-
                     info!("[LOGIN] Setting up event handler for email: {}", email);
                     // Set up event handler
                     let state_clone = state.clone();
-                    let session_id_clone = session_id.to_string();
 
-                    let client_guard = client.lock().await;
-                    client_guard.add_event_handler_closure(move |event| {
+                    client.add_event_handler_closure(move |event| {
                         let state_clone = state_clone.clone();
-                        let session_id_clone = session_id_clone.clone();
 
                         async move {
                             // Handle SessionAnswered specially - store it pending until we know which contact it's for
@@ -133,8 +118,6 @@ async fn handle_login(
                                     .pending_switchboards
                                     .write()
                                     .await
-                                    .entry(session_id_clone.clone())
-                                    .or_insert_with(Vec::new)
                                     .push(switchboard.clone());
 
                                 info!("[SWITCHBOARD] SessionAnswered switchboard stored as pending");
@@ -147,15 +130,13 @@ async fn handle_login(
 
                                 // Get current user's email to filter out self-participant events
                                 let current_user_email = state_clone
-                                    .user_emails
+                                    .user_email
                                     .read()
-                                    .await
-                                    .get(&session_id_clone)
-                                    .cloned();
+                                    .await;
 
                                 // Skip if this is the current user (we don't create switchboards to ourselves)
-                                if let Some(ref user_email) = current_user_email {
-                                    if participant_email == user_email {
+                                if let Some(ref user_email) = *current_user_email
+                                    && participant_email == user_email {
                                         info!("[SWITCHBOARD] Skipping self-participant event for {}", participant_email);
                                         // Don't process further, but still send the event to UI
                                         let msg = event_to_server_message(event);
@@ -164,39 +145,31 @@ async fn handle_login(
                                         }
                                         return;
                                     }
-                                }
 
                                 // Only match pending switchboards if we don't already have one for this contact
                                 let already_exists = state_clone
                                     .switchboards
                                     .read()
                                     .await
-                                    .get(&session_id_clone)
-                                    .map(|sb_map| sb_map.contains_key(participant_email))
-                                    .unwrap_or(false);
+                                    .contains_key(participant_email);
 
                                 if !already_exists {
                                     info!("[SWITCHBOARD] Checking for pending switchboard for {}", participant_email);
                                     // Check if we have a pending switchboard for this session
                                     let mut pending = state_clone.pending_switchboards.write().await;
-                                    if let Some(pending_list) = pending.get_mut(&session_id_clone) {
-                                        if let Some(switchboard) = pending_list.pop() {
-                                            info!("[SWITCHBOARD] Matched pending switchboard with participant {}", participant_email);
+                                    if let Some(switchboard) = pending.pop() {
+                                        info!("[SWITCHBOARD] Matched pending switchboard with participant {}", participant_email);
 
-                                            // Store it in the switchboards map
-                                            state_clone
-                                                .switchboards
-                                                .write()
-                                                .await
-                                                .get_mut(&session_id_clone)
-                                                .map(|sb_map| {
-                                                    sb_map.insert(participant_email.clone(), switchboard);
-                                                });
+                                        // Store it in the switchboards map
+                                        state_clone
+                                            .switchboards
+                                            .write()
+                                            .await
+                                            .insert(participant_email.clone(), switchboard);
 
-                                            info!("[SWITCHBOARD] Stored switchboard for {}", participant_email);
-                                        } else {
-                                            info!("[SWITCHBOARD] No pending switchboard available for {}", participant_email);
-                                        }
+                                        info!("[SWITCHBOARD] Stored switchboard for {}", participant_email);
+                                    } else {
+                                        info!("[SWITCHBOARD] No pending switchboard available for {}", participant_email);
                                     }
                                 } else {
                                     info!("[SWITCHBOARD] Switchboard already exists for {}, skipping", participant_email);
@@ -211,60 +184,34 @@ async fn handle_login(
                         }
                     });
 
-                    drop(client_guard);
-
                     info!("[LOGIN] Storing session for email: {}", email);
-                    state
-                        .sessions
-                        .write()
-                        .await
-                        .insert(session_id.to_string(), client.clone());
+                    *state.session.lock().await = Some(client);
 
                     info!(
                         "[LOGIN] Storing user email: {} for session: {}",
                         email, session_id
                     );
+
                     // Store user email for this session
-                    state
-                        .user_emails
-                        .write()
-                        .await
-                        .insert(session_id.to_string(), email.clone());
-
-                    info!("[LOGIN] Initializing switchboards map for email: {}", email);
-                    // Initialize switchboards map for this session
-                    state
-                        .switchboards
-                        .write()
-                        .await
-                        .insert(session_id.to_string(), HashMap::new());
-
-                    info!(
-                        "[LOGIN] Initializing pending switchboards for email: {}",
-                        email
-                    );
-                    // Initialize pending switchboards for this session
-                    state
-                        .pending_switchboards
-                        .write()
-                        .await
-                        .insert(session_id.to_string(), Vec::new());
+                    *state.user_email.write().await = Some(email.clone());
 
                     info!(
                         "[LOGIN] Setting initial presence to Online for email: {}",
                         email
                     );
                     // initial presence is online
-                    if let Err(e) = client.lock().await.set_presence(MsnpStatus::Online).await {
-                        error!(
-                            "[LOGIN] Failed to set initial presence for {}: {:?}",
-                            email, e
-                        );
-                    } else {
-                        info!(
-                            "[LOGIN] Initial presence set successfully for email: {}",
-                            email
-                        );
+                    if let Some(client) = state.session.lock().await.as_ref() {
+                        if let Err(e) = client.set_presence(MsnpStatus::Online).await {
+                            error!(
+                                "[LOGIN] Failed to set initial presence for {}: {:?}",
+                                email, e
+                            );
+                        } else {
+                            info!(
+                                "[LOGIN] Initial presence set successfully for email: {}",
+                                email
+                            );
+                        }
                     }
 
                     info!("[LOGIN] Login complete and successful for email: {}", email);
@@ -404,7 +351,7 @@ async fn handle_set_presence(
     state: &AppState,
 ) -> Option<ServerMessage> {
     info!("Setting presence to {} for session {}", status, session_id);
-    if let Some(client) = state.sessions.read().await.get(session_id) {
+    if let Some(client) = state.session.lock().await.as_ref() {
         let msnp_status = match status.as_str() {
             "Online" => MsnpStatus::Online,
             "Busy" => MsnpStatus::Busy,
@@ -421,7 +368,7 @@ async fn handle_set_presence(
             }
         };
 
-        match client.lock().await.set_presence(msnp_status.clone()).await {
+        match client.set_presence(msnp_status.clone()).await {
             Ok(_) => {
                 info!("Successfully set presence to {:?}", msnp_status);
                 None
@@ -449,12 +396,12 @@ async fn handle_set_personal_message(
         "Setting personal message to '{}' for session {}",
         message, session_id
     );
-    if let Some(client) = state.sessions.read().await.get(session_id) {
+    if let Some(client) = state.session.lock().await.as_ref() {
         let pm = PersonalMessage {
             psm: message,
             current_media: String::new(),
         };
-        match client.lock().await.set_personal_message(&pm).await {
+        match client.set_personal_message(&pm).await {
             Ok(_) => {
                 info!("Successfully set personal message");
                 None
@@ -479,10 +426,8 @@ async fn handle_add_contact(
     state: &AppState,
 ) -> Option<ServerMessage> {
     info!("Adding contact {} for session {}", email, session_id);
-    if let Some(client) = state.sessions.read().await.get(session_id) {
+    if let Some(client) = state.session.lock().await.as_ref() {
         match client
-            .lock()
-            .await
             .add_contact(&email, &email, MsnpList::ForwardList)
             .await
         {
@@ -505,18 +450,9 @@ async fn handle_add_contact(
     }
 }
 
-async fn handle_remove_contact(
-    email: String,
-    session_id: &str,
-    state: &AppState,
-) -> Option<ServerMessage> {
-    if let Some(client) = state.sessions.read().await.get(session_id) {
-        match client
-            .lock()
-            .await
-            .remove_contact_from_forward_list(&email)
-            .await
-        {
+async fn handle_remove_contact(email: String, state: &AppState) -> Option<ServerMessage> {
+    if let Some(client) = state.session.lock().await.as_ref() {
+        match client.remove_contact_from_forward_list(&email).await {
             Ok(_) => None,
             Err(e) => Some(ServerMessage::Error {
                 message: format!("Failed to remove contact: {:?}", e),
@@ -529,13 +465,9 @@ async fn handle_remove_contact(
     }
 }
 
-async fn handle_block_contact(
-    email: String,
-    session_id: &str,
-    state: &AppState,
-) -> Option<ServerMessage> {
-    if let Some(client) = state.sessions.read().await.get(session_id) {
-        match client.lock().await.block_contact(&email).await {
+async fn handle_block_contact(email: String, state: &AppState) -> Option<ServerMessage> {
+    if let Some(client) = state.session.lock().await.as_ref() {
+        match client.block_contact(&email).await {
             Ok(_) => None,
             Err(e) => Some(ServerMessage::Error {
                 message: format!("Failed to block contact: {:?}", e),
@@ -548,13 +480,9 @@ async fn handle_block_contact(
     }
 }
 
-async fn handle_unblock_contact(
-    email: String,
-    session_id: &str,
-    state: &AppState,
-) -> Option<ServerMessage> {
-    if let Some(client) = state.sessions.read().await.get(session_id) {
-        match client.lock().await.unblock_contact(&email).await {
+async fn handle_unblock_contact(email: String, state: &AppState) -> Option<ServerMessage> {
+    if let Some(client) = state.session.lock().await.as_ref() {
+        match client.unblock_contact(&email).await {
             Ok(_) => None,
             Err(e) => Some(ServerMessage::Error {
                 message: format!("Failed to unblock contact: {:?}", e),
@@ -577,15 +505,13 @@ async fn handle_start_conversation(
         email, session_id
     );
     // does switchboard already exist? if so no need to make another one
-    if let Some(switchboards) = state.switchboards.read().await.get(session_id) {
-        if switchboards.contains_key(&email) {
-            info!("Switchboard already exists for {}, reusing it", email);
-            return Some(ServerMessage::ConversationReady { email });
-        }
+    if state.switchboards.read().await.contains_key(&email) {
+        info!("Switchboard already exists for {}, reusing it", email);
+        return Some(ServerMessage::ConversationReady { email });
     }
 
-    if let Some(client) = state.sessions.read().await.get(session_id) {
-        match client.lock().await.create_session(&email).await {
+    if let Some(client) = state.session.lock().await.as_ref() {
+        match client.create_session(&email).await {
             Ok(switchboard) => {
                 info!("Successfully created switchboard session for {}", email);
                 let switchboard = Arc::new(switchboard);
@@ -607,8 +533,6 @@ async fn handle_start_conversation(
                     .switchboards
                     .write()
                     .await
-                    .get_mut(session_id)
-                    .unwrap()
                     .insert(email.clone(), switchboard.clone());
 
                 // create_session already handles the invitation, no need to call invite again
@@ -637,20 +561,13 @@ async fn handle_start_conversation(
 async fn handle_send_message(
     email: String,
     message: String,
-    session_id: &str,
     state: &AppState,
 ) -> Option<ServerMessage> {
     // Messages are not logged by default for privacy reasons - uncomment for debugging ONLY
     // info!("[SEND] Session {} sending to {}: '{}'", session_id, email, message);
 
     // Try to get existing switchboard
-    let switchboard = state
-        .switchboards
-        .read()
-        .await
-        .get(session_id)
-        .and_then(|m| m.get(&email))
-        .cloned();
+    let switchboard = state.switchboards.read().await.get(&email).cloned();
 
     let switchboard = if let Some(sb) = switchboard {
         Some(sb)
@@ -661,29 +578,24 @@ async fn handle_send_message(
             email
         );
         let mut pending = state.pending_switchboards.write().await;
-        if let Some(pending_list) = pending.get_mut(session_id) {
-            if let Some(pending_sb) = pending_list.pop() {
-                info!(
-                    "[SEND] Found pending switchboard, claiming it for {}",
-                    email
-                );
+        if let Some(pending_sb) = pending.pop() {
+            info!(
+                "[SEND] Found pending switchboard, claiming it for {}",
+                email
+            );
 
-                // Store it permanently
-                state
-                    .switchboards
-                    .write()
-                    .await
-                    .get_mut(session_id)
-                    .map(|sb_map| {
-                        sb_map.insert(email.clone(), pending_sb.clone());
-                    });
+            drop(switchboard);
 
-                Some(pending_sb)
-            } else {
-                info!("[SEND] No pending switchboards available");
-                None
-            }
+            // Store it permanently
+            state
+                .switchboards
+                .write()
+                .await
+                .insert(email.clone(), pending_sb.clone());
+
+            Some(pending_sb)
         } else {
+            info!("[SEND] No pending switchboards available");
             None
         }
     };
@@ -721,18 +633,8 @@ async fn handle_send_message(
     }
 }
 
-async fn handle_send_nudge(
-    email: String,
-    session_id: &str,
-    state: &AppState,
-) -> Option<ServerMessage> {
-    if let Some(switchboard) = state
-        .switchboards
-        .read()
-        .await
-        .get(session_id)
-        .and_then(|m| m.get(&email))
-    {
+async fn handle_send_nudge(email: String, state: &AppState) -> Option<ServerMessage> {
+    if let Some(switchboard) = state.switchboards.read().await.get(&email) {
         match switchboard.send_nudge().await {
             Ok(_) => None,
             Err(e) => Some(ServerMessage::Error {
@@ -746,18 +648,8 @@ async fn handle_send_nudge(
     }
 }
 
-async fn handle_send_typing(
-    email: String,
-    session_id: &str,
-    state: &AppState,
-) -> Option<ServerMessage> {
-    if let Some(switchboard) = state
-        .switchboards
-        .read()
-        .await
-        .get(session_id)
-        .and_then(|m| m.get(&email))
-    {
+async fn handle_send_typing(email: String, state: &AppState) -> Option<ServerMessage> {
+    if let Some(switchboard) = state.switchboards.read().await.get(&email) {
         match switchboard.send_typing_user(&email).await {
             Ok(_) => None,
             Err(e) => Some(ServerMessage::Error {
@@ -769,39 +661,34 @@ async fn handle_send_typing(
     }
 }
 
-async fn handle_close_conversation(
-    email: String,
-    session_id: &str,
-    state: &AppState,
-) -> Option<ServerMessage> {
-    if let Some(switchboards) = state.switchboards.write().await.get_mut(session_id) {
-        switchboards.remove(&email);
-    }
-
+async fn handle_close_conversation(email: String, state: &AppState) -> Option<ServerMessage> {
+    state.switchboards.write().await.remove(&email);
     None
 }
 
 async fn handle_logout(session_id: &str, state: &AppState) -> Option<ServerMessage> {
     info!("Logging out session: {}", session_id);
 
+    // Clean up when forwarding task ends
     // Disconnect all switchboards first
-    if let Some(switchboards) = state.switchboards.write().await.remove(session_id) {
-        for (email, switchboard) in switchboards {
-            info!("Disconnecting switchboard with {}", email);
-            let _ = switchboard.disconnect().await;
-        }
+    for (email, switchboard) in state.switchboards.write().await.drain() {
+        info!(
+            "Disconnecting switchboard with {} on forward task end",
+            email
+        );
+        let _ = switchboard.disconnect().await;
     }
 
     // Clean up pending switchboards
-    state.pending_switchboards.write().await.remove(session_id);
+    state.pending_switchboards.write().await.clear();
 
     // Clean up user email
-    state.user_emails.write().await.remove(session_id);
+    *state.user_email.write().await = None;
 
     // Disconnect client (this closes the notification server connection)
-    if let Some(client) = state.sessions.write().await.remove(session_id) {
+    if let Some(client) = state.session.lock().await.as_ref() {
         info!("Disconnecting client for session {}", session_id);
-        let _ = client.lock().await.disconnect().await;
+        let _ = client.disconnect().await;
     }
 
     // Event channel gets dropped with state later

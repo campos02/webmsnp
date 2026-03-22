@@ -24,18 +24,18 @@ use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
-type Sessions = Arc<RwLock<HashMap<String, Arc<Mutex<Client>>>>>;
-type Switchboards = Arc<RwLock<HashMap<String, HashMap<String, Arc<Switchboard>>>>>;
-type PendingSwitchboards = Arc<RwLock<HashMap<String, Vec<Arc<Switchboard>>>>>;
-type UserEmails = Arc<RwLock<HashMap<String, String>>>;
+type Session = Arc<Mutex<Option<Client>>>;
+type Switchboards = Arc<RwLock<HashMap<String, Arc<Switchboard>>>>;
+type PendingSwitchboards = Arc<RwLock<Vec<Arc<Switchboard>>>>;
+type UserEmail = Arc<RwLock<Option<String>>>;
 
 #[derive(Clone)]
 pub struct AppState {
-    sessions: Sessions,
+    session: Session,
     switchboards: Switchboards,
     event_tx: mpsc::UnboundedSender<ServerMessage>,
     pending_switchboards: PendingSwitchboards,
-    user_emails: UserEmails,
+    user_email: UserEmail,
 }
 
 #[tokio::main]
@@ -76,7 +76,7 @@ async fn main() {
 }
 
 async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket))
+    ws.on_upgrade(handle_socket)
 }
 
 async fn handle_socket(socket: WebSocket) {
@@ -91,67 +91,46 @@ async fn handle_socket(socket: WebSocket) {
     // Create event channel for this session
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let state = AppState {
-        sessions: Arc::new(RwLock::new(HashMap::new())),
+        session: Arc::new(Mutex::new(None)),
         switchboards: Arc::new(RwLock::new(HashMap::new())),
         event_tx,
-        pending_switchboards: Arc::new(RwLock::new(HashMap::new())),
-        user_emails: Arc::new(RwLock::new(HashMap::new())),
+        pending_switchboards: Arc::new(RwLock::new(Vec::new())),
+        user_email: Arc::new(RwLock::new(None)),
     };
 
     // Spawn task to forward events to websocket
-    let session_id_forward = session_id.clone();
     let state_forward = state.clone();
 
     let forward_task = tokio::spawn(async move {
         while let Some(msg) = event_rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&msg) {
-                if let Err(_e) = sender.send(Message::Text(json.into())).await {
-                    // Client probably disconnected, stop forwarding
-                    // Suppress error logging for normal disconnections
-                    break;
-                }
+            if let Ok(json) = serde_json::to_string(&msg)
+                && let Err(_e) = sender.send(Message::Text(json.into())).await
+            {
+                // Client probably disconnected, stop forwarding
+                // Suppress error logging for normal disconnections
+                break;
             }
         }
         // Clean up when forwarding task ends
         // Disconnect all switchboards first
-        if let Some(switchboards) = state_forward
-            .switchboards
-            .write()
-            .await
-            .remove(&session_id_forward)
-        {
-            for (email, switchboard) in switchboards {
-                info!(
-                    "Disconnecting switchboard with {} on forward task end",
-                    email
-                );
-                let _ = switchboard.disconnect().await;
-            }
+        for (email, switchboard) in state_forward.switchboards.write().await.drain() {
+            info!(
+                "Disconnecting switchboard with {} on forward task end",
+                email
+            );
+            let _ = switchboard.disconnect().await;
         }
 
         // Clean up pending switchboards
-        state_forward
-            .pending_switchboards
-            .write()
-            .await
-            .remove(&session_id_forward);
+        state_forward.pending_switchboards.write().await.clear();
 
         // Clean up user email
-        state_forward
-            .user_emails
-            .write()
-            .await
-            .remove(&session_id_forward);
+        *state_forward.user_email.write().await = None;
 
         // Disconnect client
-        if let Some(client) = state_forward
-            .sessions
-            .write()
-            .await
-            .remove(&session_id_forward)
-        {
+        if let Some(client) = state_forward.session.lock().await.as_ref() {
             info!("Disconnecting client on forward task end");
-            let _ = client.lock().await.disconnect().await;
+            let _ = client.disconnect().await;
         }
     });
 
@@ -198,28 +177,26 @@ async fn handle_socket(socket: WebSocket) {
         }
     }
 
-    // Cleanup on disconnect - ensure both tasks clean up
+    // Clean up when forwarding task ends
     // Disconnect all switchboards first
-    if let Some(switchboards) = state.switchboards.write().await.remove(&session_id) {
-        for (email, switchboard) in switchboards {
-            info!(
-                "Disconnecting switchboard with {} on WebSocket close",
-                email
-            );
-            let _ = switchboard.disconnect().await;
-        }
+    for (email, switchboard) in state.switchboards.write().await.drain() {
+        info!(
+            "Disconnecting switchboard with {} on forward task end",
+            email
+        );
+        let _ = switchboard.disconnect().await;
     }
 
     // Clean up pending switchboards
-    state.pending_switchboards.write().await.remove(&session_id);
+    state.pending_switchboards.write().await.clear();
 
     // Clean up user email
-    state.user_emails.write().await.remove(&session_id);
+    *state.user_email.write().await = None;
 
     // Disconnect client (this closes the notification server connection)
-    if let Some(client) = state.sessions.write().await.remove(&session_id) {
-        info!("Disconnecting client on WebSocket close");
-        let _ = client.lock().await.disconnect().await;
+    if let Some(client) = state.session.lock().await.as_ref() {
+        info!("Disconnecting client for session {}", session_id);
+        let _ = client.disconnect().await;
     }
 
     // Wait for forward task to finish
