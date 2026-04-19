@@ -7,7 +7,7 @@ This repository contains the Rust-based source code for the server.
 > [!NOTE]
 > If you are hosting your own instance of iMSNP, please let me know
 As of right now, there is **1** website hosting this server:
-- https://imsnp-staging.kooper.online (not 24/7, only for testing)
+- https://imsnp.kooper.online (not 24/7, only for testing)
 
 Even so, it is highly recommended to host iMSNP yourself!
 
@@ -33,7 +33,7 @@ Issues will be closed as "wontfix" as its out of scope (this project was never m
 
 ## Todo (in descending order of priority)
 - [ ] Proper versioning system (currently half-implemented)
-- [ ] Replace web app icon with something original (https://github.com/dskooper/webmsnp/issues/1)
+- [x] Replace web app icon with something original (https://github.com/dskooper/imsnp/issues/1)
 - [ ] See your current username and personal message
   - [ ] Change your username
 - [ ] Allow users to remove contacts
@@ -61,12 +61,12 @@ Issues will be closed as "wontfix" as its out of scope (this project was never m
 Once installed, you can do the following:
 - Linux:
   ```
-  git clone https://github.com/dskooper/webmsnp
-  cd webmsnp
+  git clone https://github.com/dskooper/imsnp
+  cd imsnp
   ./build-release.sh
   ```
 - Windows:
-  1. Download the entire repository by clicking on [this link](https://github.com/dskooper/webmsnp/archive/refs/heads/main.zip)
+  1. Download the entire repository by clicking on [this link](https://github.com/dskooper/imsnp/archive/refs/heads/main.zip)
   2. Extract the repository into a folder and enter it.
   3. Right click on `build-release.ps1` and press on "Run with PowerShell`
 
