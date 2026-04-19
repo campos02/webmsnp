@@ -5,18 +5,61 @@
     var currentContact = null;
     var contacts = {};
     var conversations = {};
+    var conversationStates = {};
+    var queuedMessages = {};
     var typingTimers = {};
     var isRedirecting = false;
+    var loginAttemptActive = false;
+    var pendingLoginMessage = null;
+    var websocketUrls = [];
+    var websocketAttemptIndex = 0;
+    var websocketOpened = false;
+    var websocketRetryTimer = null;
+    var forceHttpEnabled = false;
+    var userAgent = window.navigator && window.navigator.userAgent ? window.navigator.userAgent : '';
+
+    var configuredServices = {
+        crosstalk: {
+            server: 'ms.msgrsvcs.ctsrv.gay',
+            port: 1863,
+            nexus: 'pp.login.ugnet.gay',
+            config: 'config.login.ugnet.gay'
+        },
+        crosstalk_nodispatch: {
+            server: 'ms.msgrsvcs.ctsrv.gay',
+            port: 1864,
+            nexus: 'pp.login.ugnet.gay',
+            config: 'config.login.ugnet.gay'
+        },
+        legacy: {
+            server: 'messenger.hotmail.com',
+            port: 1863,
+            nexus: 'nexus.passport.com',
+            config: 'config.messenger.msn.com'
+        }
+    };
+
+    function isUnsupportedIOSDevice() {
+        return /(iPhone|iPad|iPod)/.test(userAgent) && /OS [1-5]_/.test(userAgent) && /Safari/.test(userAgent);
+    }
     
     // theres definitely a better way to do this lmao
     var loginScreen = document.getElementById('loginScreen');
     var mainScreen = document.getElementById('mainScreen');
     var chatScreen = document.getElementById('chatScreen');
     var loginForm = document.getElementById('loginForm');
+    var requiredLoginInputs = loginForm ? loginForm.querySelectorAll('input[required]') : [];
     var loginBtn = document.getElementById('loginBtn');
+    var serviceSelect = document.getElementById('service');
+    var forceHttpToggle = document.getElementById('forceHttp');
+    var serverInput = document.getElementById('server');
+    var portInput = document.getElementById('port');
+    var nexusInput = document.getElementById('nexus');
+    var configInput = document.getElementById('config');
     var loginError = document.getElementById('loginError');
     var loginStatus = document.getElementById('loginStatus');
     var statusSelect = document.getElementById('statusSelect');
+    var reloadBtn = document.getElementById('reloadBtn');
     var logoutBtn = document.getElementById('logoutBtn');
     var personalMessageInput = document.getElementById('personalMessageInput');
     var setPsmBtn = document.getElementById('setPsmBtn');
@@ -28,6 +71,59 @@
     var closeChatBtn = document.getElementById('closeChatBtn');
     var messageContainer = document.getElementById('messageContainer');
     var messageInput = document.getElementById('messageInput');
+    var customServiceRows = loginForm ? loginForm.querySelectorAll('.custom-service-row') : [];
+
+    function normalizeHostInput(rawValue) {
+        var value = (rawValue || '').trim();
+        if (!value) return '';
+
+        value = value.replace(/^https?:\/\//i, '');
+        value = value.replace(/\/.*$/, '');
+        value = value.replace(/\s+/g, '');
+        return value;
+    }
+
+    function buildServiceUrl(hostInput, pathSuffix, forceHttp) {
+        var host = normalizeHostInput(hostInput);
+        if (!host) return '';
+        var protocol = forceHttp ? 'http://' : 'https://';
+        return protocol + host + pathSuffix;
+    }
+
+    function getSelectedServiceConfig() {
+        var selectedService = serviceSelect ? serviceSelect.value : 'custom';
+        var useCustom = selectedService === 'custom';
+        var preset = configuredServices[selectedService] || null;
+
+        if (!useCustom && preset) {
+            return {
+                server: preset.server,
+                port: preset.port,
+                nexus: preset.nexus,
+                config: preset.config,
+                useCustom: false
+            };
+        }
+
+        return {
+            server: serverInput ? serverInput.value.trim() : '',
+            port: portInput ? parseInt(portInput.value, 10) : NaN,
+            nexus: nexusInput ? nexusInput.value.trim() : '',
+            config: configInput ? configInput.value.trim() : '',
+            useCustom: true
+        };
+    }
+
+    function updateServiceFieldsVisibility() {
+        var useCustom = !serviceSelect || serviceSelect.value === 'custom';
+        var i;
+
+        for (i = 0; i < customServiceRows.length; i++) {
+            customServiceRows[i].style.display = useCustom ? 'block' : 'none';
+        }
+
+        updateLoginButtonState();
+    }
     
     // Strip Messenger Plus! format tags from usernames
     function cleanDisplayName(name, maxLength) {
@@ -40,19 +136,53 @@
     
     // websocket init
     function connectWebSocket() {
-        var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = protocol + '//' + window.location.host + '/ws';
+        if (isUnsupportedIOSDevice()) {
+            showError('Unsupported device');
+            return;
+        }
+
+        var protocol = forceHttpEnabled ? 'ws:' : (window.location.protocol === 'https:' ? 'wss:' : 'ws:');
+        var host = window.location.hostname;
+        var port = window.location.port ? ':' + window.location.port : '';
+        var baseUrl = protocol + '//' + host + port;
+
+        if (!websocketUrls.length) {
+            websocketUrls = [
+                baseUrl + '/ws',
+                baseUrl + '/websocket',
+                baseUrl + '/'
+            ];
+        }
+
+        if (websocketRetryTimer) {
+            clearTimeout(websocketRetryTimer);
+            websocketRetryTimer = null;
+        }
+
+        var wsUrl = websocketUrls[websocketAttemptIndex];
+        if (!wsUrl) {
+            console.error('[CLIENT_WS] No websocket URLs left to try');
+            showError('Connection closed. Please refresh and sign in again.');
+            return;
+        }
         
         console.log('[CLIENT_WS] Connecting to WebSocket:', wsUrl);
         ws = new WebSocket(wsUrl);
         
         ws.onopen = function() {
+            websocketOpened = true;
             console.log('[CLIENT_WS] WebSocket connection opened successfully');
+            if (pendingLoginMessage) {
+                console.log('[CLIENT_WS] Sending queued login message');
+                ws.send(JSON.stringify(pendingLoginMessage));
+                pendingLoginMessage = null;
+            }
         };
         
         ws.onmessage = function(event) {
             try {
                 console.log('[CLIENT_WS] Raw message received (length:', event.data.length, ')');
+                console.log('[CLIENT_WS] Message data:', event.data);
                 var message = JSON.parse(event.data);
                 handleServerMessage(message);
             } catch (e) {
@@ -63,13 +193,25 @@
         
         ws.onerror = function(error) {
             console.error('[CLIENT_WS] WebSocket error occurred:', error);
-            showError('Connection error. Please refresh and try again.');
         };
         
         ws.onclose = function() {
             console.log('[CLIENT_WS] WebSocket connection closed');
             console.log('[CLIENT_WS] isRedirecting flag:', isRedirecting);
-            if (!isRedirecting) {
+            if (websocketOpened) {
+                websocketOpened = false;
+                return;
+            }
+
+            websocketAttemptIndex += 1;
+            if (pendingLoginMessage && websocketAttemptIndex < websocketUrls.length) {
+                websocketRetryTimer = setTimeout(function() {
+                    connectWebSocket();
+                }, 250);
+                return;
+            }
+
+            if (!isRedirecting && loginAttemptActive) {
                 showError('Connection closed. Please refresh and sign in again.');
             }
         };
@@ -143,7 +285,7 @@
                 handleNudge(message.email);
                 break;
             case 'typing':
-                handleTyping(message.email);
+                handleTypingNotification(message.email);
                 break;
             case 'participantJoined':
                 console.log('[CLIENT] ParticipantJoined received for:', message.email);
@@ -156,43 +298,56 @@
                 handleDisplayPicture(message);
                 break;
             case 'disconnected':
-                handleDisconnected();
+                handleDisconnected(message);
                 break;
         }
     }
     
     function handleLogin(e) {
         if (e) e.preventDefault();
-        
+
         var email = document.getElementById('email').value.trim();
         var password = document.getElementById('password').value;
-        var server = document.getElementById('server').value.trim();
-        var port = parseInt(document.getElementById('port').value, 10);
-        var nexusUrl = document.getElementById('nexusUrl').value.trim();
-        var configServer = document.getElementById('configServer').value.trim();
+        var serviceConfig = getSelectedServiceConfig();
+        var server = serviceConfig.server;
+        var port = serviceConfig.port;
+        var forceHttp = forceHttpToggle ? !!forceHttpToggle.checked : false;
+        var nexusUrl = buildServiceUrl(serviceConfig.nexus, '/rdr/pprdr.asp', forceHttp);
+        var configServer = buildServiceUrl(serviceConfig.config, '/Config/MsgrConfig.asmx', forceHttp);
+        var emailCharCodes = [];
+        var emailIdx;
         
         console.log('[CLIENT_LOGIN] Login attempt initiated');
         console.log('[CLIENT_LOGIN] Email entered:', email);
         console.log('[CLIENT_LOGIN] Email length:', email.length);
-        console.log('[CLIENT_LOGIN] Email char codes:', Array.from(email).map(c => c.charCodeAt(0)));
+        for (emailIdx = 0; emailIdx < email.length; emailIdx++) {
+            emailCharCodes.push(email.charCodeAt(emailIdx));
+        }
+        console.log('[CLIENT_LOGIN] Email char codes:', emailCharCodes);
         console.log('[CLIENT_LOGIN] Password length:', password.length);
         console.log('[CLIENT_LOGIN] Server:', server, ':', port);
         console.log('[CLIENT_LOGIN] Nexus URL:', nexusUrl);
         console.log('[CLIENT_LOGIN] Config Server:', configServer || '(none)');
+        console.log('[CLIENT_LOGIN] Force HTTP:', forceHttp);
         
-        if (!email || !password || !server || !port || !nexusUrl) {
+        if (!email || !password || !server || !port || !nexusUrl || !configServer) {
             console.error('[CLIENT_LOGIN] Validation failed - missing required fields');
             showError('Please fill in all required fields');
+            updateLoginButtonState();
             return;
         }
         
-        console.log('[CLIENT_LOGIN] Validation passed, sending login message');
+        console.log('[CLIENT_LOGIN] Validation passed, preparing login message');
+        forceHttpEnabled = forceHttp;
+        loginAttemptActive = true;
+        websocketAttemptIndex = 0;
+        websocketOpened = false;
         loginBtn.disabled = true;
         loginBtn.innerHTML = 'Signing in...';
         hideError();
         hideStatus();
-        
-        sendMessage({
+
+        pendingLoginMessage = {
             type: 'login',
             email: email,
             password: password,
@@ -200,16 +355,29 @@
             port: port,
             nexus_url: nexusUrl,
             config_server: configServer || null
-        });
-        console.log('[CLIENT_LOGIN] Login message sent to server');
-    }
 
-    // This function is absolute hot shit
+        };
+
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+            connectWebSocket();
+        }
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(pendingLoginMessage));
+            pendingLoginMessage = null;
+            console.log('[CLIENT_LOGIN] Login message sent to server');
+        } else {
+            showStatus('Connecting to server...');
+            console.log('[CLIENT_LOGIN] Login queued until WebSocket opens');
+        }
+    }
+    
     function handleRedirect(server, port) {
-        console.log('[CLIENT_REDIRECT] Redirect received to', server, ':', port);
         showStatus('Redirecting to ' + server + ':' + port + '...');
         isRedirecting = true;
-        ws.close();
+        if (ws) {
+            ws.close();
+        }
         
         // patience is a virtue
         setTimeout(function() {
@@ -221,11 +389,14 @@
                 isRedirecting = false;
                 var email = document.getElementById('email').value.trim();
                 var password = document.getElementById('password').value;
-                var nexusUrl = document.getElementById('nexusUrl').value.trim();
-                var configServer = document.getElementById('configServer').value.trim();
+                var serviceConfig = getSelectedServiceConfig();
+                var nexusUrl = buildServiceUrl(serviceConfig.nexus, '/rdr/pprdr.asp', forceHttpEnabled);
+                var configServer = buildServiceUrl(serviceConfig.config, '/Config/MsgrConfig.asmx', forceHttpEnabled);
                 
                 console.log('[CLIENT_REDIRECT] Re-attempting login after redirect with email:', email);
-                sendMessage({
+                websocketAttemptIndex = 0;
+                websocketOpened = false;
+                pendingLoginMessage = {
                     type: 'login',
                     email: email,
                     password: password,
@@ -233,15 +404,22 @@
                     port: port,
                     nexus_url: nexusUrl,
                     config_server: configServer || null
-                });
-                console.log('[CLIENT_REDIRECT] Redirect login message sent');
-            }, 3000);
-        }, 3000);
+                };
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(pendingLoginMessage));
+                    pendingLoginMessage = null;
+                    console.log('[CLIENT_REDIRECT] Redirect login message sent');
+                } else {
+                    console.log('[CLIENT_REDIRECT] Redirect login queued until WebSocket opens');
+                }
+            }, 2000);
+        }, 2000);
     }
     
     function handleAuthenticated() {
+        loginAttemptActive = false;
         loginBtn.disabled = false;
-        loginBtn.innerHTML = 'Sign In';
+        loginBtn.innerHTML = 'Signed in!';
         hideError();
         showStatus('Signed in successfully!');
         
@@ -304,12 +482,15 @@
         if (!conversations[email]) {
             conversations[email] = [];
         }
+        conversationStates[email] = 'ready';
+        flushQueuedMessages(email);
         openChat(email);
         console.log('[CLIENT] handleConversationReady - chat opened for', email);
     }
     
     function handleTextMessage(msg) {
         console.log('[CLIENT] handleTextMessage - from:', msg.email, '| text:', msg.message);
+        conversationStates[msg.email] = 'ready';
         if (!conversations[msg.email]) {
             conversations[msg.email] = [];
             console.log('[CLIENT] handleTextMessage - initialized conversation for', msg.email);
@@ -355,7 +536,7 @@
     
     // Handle typing notification
     // showTypingIndicator is broken atm, fix later
-    function handleTyping(email) {
+    function handleTypingNotification(email) {
         if (currentContact === email) {
             showTypingIndicator(email);
         }
@@ -363,6 +544,8 @@
     
     function handleParticipantJoined(email) {
         console.log('[CLIENT] handleParticipantJoined - email:', email, '| conversations[email]:', !!conversations[email], '| currentContact:', currentContact);
+        conversationStates[email] = 'ready';
+        flushQueuedMessages(email);
         
         // Initialize conversation if it doesn't exist
         if (!conversations[email]) {
@@ -388,11 +571,23 @@
         }
     }
     
-    function handleDisconnected() {
-        showError('You have been disconnected from the server');
-        setTimeout(function() {
-            window.location.reload();
-        }, 2000);
+    function handleDisconnected(message) {
+        var reason = (message && message.message) ? message.message : 'Conversation disconnected';
+        console.warn('[CLIENT] Disconnected event received:', message);
+
+        // Treat this as a non-fatal runtime event to avoid forced logout/reload loops.
+        if (chatScreen.style.display !== 'none' && currentContact) {
+            delete conversationStates[currentContact];
+            delete queuedMessages[currentContact];
+            addSystemMessage(reason);
+            chatScreen.style.display = 'none';
+            mainScreen.style.display = 'block';
+            adjustContactListHeight();
+            currentContact = null;
+            return;
+        }
+
+        showStatus(reason);
     }
     
     function updateContactList() {
@@ -469,16 +664,77 @@
     
     function startConversation(email) {
         console.log('startConversation called for:', email);
+        if (conversationStates[email] === 'ready') {
+            console.log('Conversation already ready, opening chat for:', email);
+            openChat(email);
+            return;
+        }
+
+        if (conversationStates[email] === 'starting') {
+            console.log('Conversation already starting for:', email);
+            return;
+        }
+
         if (!conversations[email]) {
+            conversations[email] = [];
+        }
+
+        conversationStates[email] = 'starting';
+        if (ws && ws.readyState === WebSocket.OPEN) {
             console.log('Sending startConversation request for:', email);
             sendMessage({
                 type: 'startConversation',
                 email: email
             });
         } else {
-            console.log('Conversation already exists, opening chat for:', email);
-            openChat(email);
+            console.warn('WebSocket not ready, cannot start conversation yet for:', email);
+            showStatus('Connecting... please try again.');
         }
+    }
+
+    function queueMessage(email, text) {
+        if (!queuedMessages[email]) {
+            queuedMessages[email] = [];
+        }
+        queuedMessages[email].push(text);
+    }
+
+    function sendChatMessage(email, text) {
+        if (!text || !email) return;
+
+        console.log('[CLIENT] Sending message to', email, '- text:', text.substring(0, 50));
+        sendMessage({
+            type: 'sendMessage',
+            email: email,
+            message: text
+        });
+
+        var msg = {
+            sender: getUserEmail(),
+            text: text,
+            time: new Date()
+        };
+
+        if (!conversations[email]) {
+            conversations[email] = [];
+        }
+        conversations[email].push(msg);
+
+        if (currentContact === email) {
+            displayMessage(msg, true);
+            scrollToBottom();
+        }
+    }
+
+    function flushQueuedMessages(email) {
+        if (!queuedMessages[email] || !queuedMessages[email].length) {
+            return;
+        }
+
+        while (queuedMessages[email].length) {
+            sendChatMessage(email, queuedMessages[email].shift());
+        }
+        delete queuedMessages[email];
     }
     
     function openChat(email) {
@@ -600,51 +856,24 @@
         var text = messageInput.value.trim();
         console.log('handleSendMessage called, text:', text, 'currentContact:', currentContact);
         if (!text || !currentContact) return;
-        
-        console.log('[CLIENT] Sending message to', currentContact, '- text:', text.substring(0, 50));
-        sendMessage({
-            type: 'sendMessage',
-            email: currentContact,
-            message: text
-        });
-        
-        var msg = {
-            sender: getUserEmail(),
-            text: text,
-            time: new Date()
-        };
-        
-        console.log('Created message object:', msg);
-        
-        if (!conversations[currentContact]) {
-            conversations[currentContact] = [];
+
+        if (conversationStates[currentContact] !== 'ready') {
+            queueMessage(currentContact, text);
+            startConversation(currentContact);
+            showStatus('Starting conversation...');
+            messageInput.value = '';
+            return;
         }
-        conversations[currentContact].push(msg);
-        
-        console.log('Calling displayMessage for sent message');
-        displayMessage(msg, true);
+
+        sendChatMessage(currentContact, text);
         messageInput.value = '';
-        scrollToBottom();
     }
     
     // Send typing notification
     // Seems to be doing some weird shit
     var typingTimeout = null;
-    function handleTyping() {
-        if (!currentContact) return;
-        
-        if (typingTimeout) {
-            clearTimeout(typingTimeout);
-        }
-        
-        sendMessage({
-            type: 'sendTyping',
-            email: currentContact // shouldn't this be the user's email, not the recipients?
-        });
-        
-        typingTimeout = setTimeout(function() {
-            typingTimeout = null;
-        }, 2000);
+    function handleTypingInput() {
+        return;
     }
     
     function handleNudgeBtn() {
@@ -665,6 +894,8 @@
                 email: currentContact
             });
             delete conversations[currentContact];
+            delete conversationStates[currentContact];
+            delete queuedMessages[currentContact];
         }
         
         currentContact = null;
@@ -720,12 +951,17 @@
         // Reload the page instead of just switching screens
         window.location.reload();
     }
+
+    function handleReload() {
+        window.location.reload();
+    }
     
     function showError(message) {
         loginError.textContent = message;
         loginError.style.display = 'block';
         loginBtn.disabled = false;
         loginBtn.innerHTML = 'Sign In';
+        updateLoginButtonState();
     }
     
     function hideError() {
@@ -740,11 +976,74 @@
     function hideStatus() {
         loginStatus.style.display = 'none';
     }
+
+    function addClass(el, className) {
+        if (!el) return;
+        if (el.classList) {
+            el.classList.add(className);
+            return;
+        }
+
+        if ((' ' + el.className + ' ').indexOf(' ' + className + ' ') === -1) {
+            el.className = el.className ? el.className + ' ' + className : className;
+        }
+    }
+
+    function removeClass(el, className) {
+        if (!el) return;
+        if (el.classList) {
+            el.classList.remove(className);
+            return;
+        }
+
+        el.className = el.className.replace(new RegExp('(^|\\s)' + className + '(?=\\s|$)', 'g'), ' ').replace(/\s+/g, ' ').replace(/^\s|\s$/g, '');
+    }
+
+    function updateLoginButtonState() {
+        var allFilled = true;
+        var emailInput = document.getElementById('email');
+        var passwordInput = document.getElementById('password');
+        var serviceConfig;
+
+        if (!emailInput.value || !emailInput.value.trim() || !passwordInput.value || !passwordInput.value.trim()) {
+            allFilled = false;
+        }
+
+        if (allFilled && serviceSelect && !serviceSelect.value) {
+            allFilled = false;
+        }
+
+        if (allFilled && serviceSelect && serviceSelect.value === 'custom') {
+            serviceConfig = getSelectedServiceConfig();
+            if (!serviceConfig.server || !serviceConfig.port || !serviceConfig.nexus || !serviceConfig.config) {
+                allFilled = false;
+            }
+        }
+
+        if (allFilled) {
+            addClass(loginBtn, 'login-ready');
+        } else {
+            removeClass(loginBtn, 'login-ready');
+        }
+    }
     
     // Event listeners
     loginForm.addEventListener('submit', handleLogin);
     loginBtn.addEventListener('click', handleLogin);
+
+    for (var requiredIndex = 0; requiredIndex < requiredLoginInputs.length; requiredIndex++) {
+        requiredLoginInputs[requiredIndex].addEventListener('input', updateLoginButtonState);
+        requiredLoginInputs[requiredIndex].addEventListener('change', updateLoginButtonState);
+        requiredLoginInputs[requiredIndex].addEventListener('keyup', updateLoginButtonState);
+    }
+
     statusSelect.addEventListener('change', handleStatusChange);
+    if (serviceSelect) {
+        serviceSelect.addEventListener('change', updateServiceFieldsVisibility);
+    }
+    if (reloadBtn) {
+        reloadBtn.addEventListener('click', handleReload);
+    }
     logoutBtn.addEventListener('click', handleLogout);
     setPsmBtn.addEventListener('click', handleSetPsm);
     addContactBtn.addEventListener('click', handleAddContact);
@@ -767,12 +1066,15 @@
     
     if (togglePsm && psmSection) {
         togglePsm.addEventListener('click', function() {
+            var section = togglePsm.parentNode;
             if (psmSection.style.display === 'none') {
                 psmSection.style.display = 'block';
                 togglePsm.textContent = 'Personal Message ▲';
+                if (section && section.classList) section.classList.add('open');
             } else {
                 psmSection.style.display = 'none';
                 togglePsm.textContent = 'Personal Message ▼';
+                if (section && section.classList) section.classList.remove('open');
             }
             adjustContactListHeight();
         });
@@ -780,19 +1082,22 @@
     
     if (toggleAddContact && addContactSection) {
         toggleAddContact.addEventListener('click', function() {
+            var section = toggleAddContact.parentNode;
             if (addContactSection.style.display === 'none') {
                 addContactSection.style.display = 'block';
                 toggleAddContact.textContent = 'Add Contact ▲';
+                if (section && section.classList) section.classList.add('open');
             } else {
                 addContactSection.style.display = 'none';
                 toggleAddContact.textContent = 'Add Contact ▼';
+                if (section && section.classList) section.classList.remove('open');
             }
             adjustContactListHeight();
         });
     }
     
     // Message input handlers
-    messageInput.addEventListener('keyup', handleTyping);
+    messageInput.addEventListener('keyup', handleTypingInput);
     
     personalMessageInput.addEventListener('keypress', function(e) {
         if (e.keyCode === 13) {
@@ -807,25 +1112,101 @@
             e.preventDefault();
         }
     });
+
+    if (serverInput) {
+        serverInput.addEventListener('input', updateLoginButtonState);
+        serverInput.addEventListener('change', updateLoginButtonState);
+        serverInput.addEventListener('keyup', updateLoginButtonState);
+    }
+
+    if (nexusInput) {
+        nexusInput.addEventListener('input', updateLoginButtonState);
+        nexusInput.addEventListener('change', updateLoginButtonState);
+        nexusInput.addEventListener('keyup', updateLoginButtonState);
+    }
+
+    if (configInput) {
+        configInput.addEventListener('input', updateLoginButtonState);
+        configInput.addEventListener('change', updateLoginButtonState);
+        configInput.addEventListener('keyup', updateLoginButtonState);
+    }
+
+    if (forceHttpToggle) {
+        forceHttpToggle.addEventListener('change', updateLoginButtonState);
+    }
+
+    if (portInput) {
+        portInput.addEventListener('input', function() {
+            var digitsOnly = this.value.replace(/[^0-9]/g, '');
+            if (!digitsOnly) {
+                this.value = '';
+                return;
+            }
+
+            var portNumber = parseInt(digitsOnly, 10);
+            if (portNumber > 65535) portNumber = 65535;
+            if (portNumber < 1) portNumber = 1;
+            this.value = String(portNumber);
+        });
+
+        portInput.addEventListener('keypress', function(e) {
+            var charCode = e.which || e.keyCode;
+            if (charCode === 8 || charCode === 9 || charCode === 13 || charCode === 27 || charCode === 46) {
+                return;
+            }
+
+            if (charCode < 48 || charCode > 57) {
+                e.preventDefault();
+            }
+        });
+
+        portInput.addEventListener('paste', function(e) {
+            var clipboard = e.clipboardData || window.clipboardData;
+            if (!clipboard) return;
+
+            var pasted = clipboard.getData('text');
+            if (/[^0-9]/.test(pasted)) {
+                e.preventDefault();
+                this.value = pasted.replace(/[^0-9]/g, '').slice(0, 5);
+            }
+        });
+    }
     
     function adjustContactListHeight() {
         var collapsibleSections = document.querySelector('.collapsible-sections');
-        var content = document.querySelector('#mainScreen .content');
+        var mainNavbar = document.querySelector('#mainScreen .navbar');
         
-        if (collapsibleSections && content && contactList) {
-            var contentHeight = content.offsetHeight;
-            var sectionsHeight = collapsibleSections.offsetHeight;
-            var remainingHeight = contentHeight - sectionsHeight;
+        if (collapsibleSections && contactList) {
+            var viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+            var sectionsRect = collapsibleSections.getBoundingClientRect();
+            var navbarHeight = mainNavbar ? mainNavbar.offsetHeight : 44;
+
+            // Keep a small bottom gutter so the rounded container is not clipped on old WebKit.
+            var bottomGutter = 10;
+            var remainingHeight = viewportHeight - sectionsRect.bottom - bottomGutter;
+
+            // When first rendering on mobile Safari, geometry can be stale for one tick.
+            // Fallback to navbar-based estimate to avoid tiny initial list heights.
+            if (remainingHeight < 120) {
+                remainingHeight = viewportHeight - navbarHeight - collapsibleSections.offsetHeight - 30;
+            }
+
+            if (remainingHeight < 180) remainingHeight = 180;
             contactList.style.height = remainingHeight + 'px';
         }
     }
     
     // Init
-    connectWebSocket();
+    updateServiceFieldsVisibility();
+    updateLoginButtonState();
     adjustContactListHeight();
+
+    setTimeout(adjustContactListHeight, 50);
+    setTimeout(adjustContactListHeight, 250);
     
     // Adjust on window resize
     window.addEventListener('resize', adjustContactListHeight);
     window.addEventListener('orientationchange', adjustContactListHeight);
+    window.addEventListener('load', adjustContactListHeight);
     
 })();

@@ -5,65 +5,78 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <meta name="apple-mobile-web-app-title" content="WebMSNP">
+    <meta name="apple-mobile-web-app-title" content="iMSNP">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
-    <link rel="apple-touch-icon" sizes="57x57" href="apple-touch-icon-57x57.png">
-    <link rel="apple-touch-icon" sizes="60x60" href="apple-touch-icon-60x60.png">
-    <link rel="apple-touch-icon" sizes="72x72" href="apple-touch-icon-72x72.png">
-    <link rel="apple-touch-icon" sizes="76x76" href="apple-touch-icon-76x76.png">
-    <link rel="apple-touch-icon" sizes="114x114" href="apple-touch-icon-114x114.png">
-    <link rel="apple-touch-icon" sizes="120x120" href="apple-touch-icon-120x120.png">
-    <link rel="apple-touch-icon" sizes="144x144" href="apple-touch-icon-144x144.png">
-    <link rel="apple-touch-icon" sizes="152x152" href="apple-touch-icon-152x152.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-180x180.png">
-    <title>WebMSNP</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>iMSNP</title>
+    <link rel="stylesheet" href="saurik.css?v=20260418-28">
+    
 </head>
-<body>
+<body class="pinstripe">
     <!-- Login Screen -->
     <div id="loginScreen" class="screen">
-        <div class="header">
-            <h1>WebMSNP</h1>
+        <div class="navbar">
+            iMSNP
+            <div class="nav-right">
+                <button id="reloadBtn" class="btn-secondary">Reload</button>
+            </div>
         </div>
-        <div class="content">
+        <div class="login-caption">Work-in-progress, bugs and issues may occur</div>
+        <panel class="screen-panel">
             <form id="loginForm" onsubmit="return false;">
-                <div class="form-group">
-                    <label for="email">Email:</label>
-                    <input type="email" id="email" name="email" required autocomplete="email">
+                <div class="login-credentials">
+                    <div class="login-row">
+                        <label for="email">Email</label>
+                        <input type="email" id="email" name="email" required autocomplete="email" placeholder="example@hotmail.com">
+                    </div>
+                    <div class="login-row">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="Required">
+                    </div>
+                    <div class="login-row">
+                        <label for="service">Service</label>
+                        <select id="service" name="service" required>
+                            <option value="crosstalk">CrossTalk</option>
+                            <option value="crosstalk_nodispatch">CrossTalk (alt)</option>
+                            <option value="legacy">Legacy MSN</option>
+                            <option value="custom">Custom...</option>
+                        </select>
+                    </div>
+                    <div class="login-row switch-row">
+                        <label for="forceHttp">Force HTTP</label>
+                        <input type="checkbox" id="forceHttp" name="forceHttp" class="row-switch">
+                    </div>
+                    <div class="login-row custom-service-row" id="customServerRow" style="display:none;">
+                        <label for="server">Main Server</label>
+                        <input type="text" id="server" name="server" placeholder="Required">
+                    </div>
+                    <div class="login-row custom-service-row" id="customPortRow" style="display:none;">
+                        <label for="port">Port</label>
+                        <input type="tel" id="port" name="port" placeholder="1863" value="1863" maxlength="5" autocomplete="off" inputmode="numeric" pattern="[0-9]*">
+                    </div>
+                    <div class="login-row custom-service-row" id="customNexusRow" style="display:none;">
+                        <label for="nexus">Nexus</label>
+                        <input type="text" id="nexus" name="nexus" placeholder="Required">
+                    </div>
+                    <div class="login-row custom-service-row" id="customConfigRow" style="display:none;">
+                        <label for="config">Config</label>
+                        <input type="text" id="config" name="config" placeholder="Optional">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="password">Password:</label>
-                    <input type="password" id="password" name="password" required autocomplete="current-password">
+
+                <button type="submit" id="loginBtn" class="btn-primary">Sign In</button>
+                <div class="message-strip">
+                    <div id="loginError" class="error-message" style="display:none;"></div>
+                    <div id="loginStatus" class="status-message" style="display:none;"></div>
                 </div>
-                <div class="form-group">
-                    <label for="server">Server:</label>
-                    <input type="text" id="server" name="server" value="ms.msgrsvcs.ctsrv.gay" required>
-                </div>
-                <div class="form-group">
-                    <label for="port">Port:</label>
-                    <input type="number" id="port" name="port" value="1863" required>
-                </div>
-                <div class="form-group">
-                    <label for="nexusUrl">Nexus URL:</label>
-                    <input type="text" id="nexusUrl" name="nexusUrl" value="https://pp.login.ugnet.gay/rdr/pprdr.asp" required>
-                </div>
-                <div class="form-group">
-                    <label for="configServer">Config Server:</label>
-                    <input type="text" id="configServer" name="configServer" value="https://conf.msgrsvcs.ctsrv.gay/Config/MsgrConfig.asmx">
-                </div>
-                <div class="form-group">
-                    <button type="submit" id="loginBtn" class="btn-primary">Sign In</button>
-                </div>
-                <div id="loginError" class="error-message" style="display:none;"></div>
-                <div id="loginStatus" class="status-message" style="display:none;"></div>
+                <div class="login-caption">iMSNP connects you with your MSN Messenger contacts, on the web, on the go!</div>
             </form>
-        </div>
+        </panel>
     </div>
 
     <!-- Main Screen -->
     <div id="mainScreen" class="screen" style="display:none;">
-        <div class="header">
-            <div class="header-controls-left">
+        <div class="navbar">
+            <div class="nav-left">
                 <select id="statusSelect" class="status-select">
                     <option value="Online">Online</option>
                     <option value="Busy">Busy</option>
@@ -75,12 +88,12 @@
                     <option value="Invisible">Invisible</option>
                 </select>
             </div>
-            <h1>Contacts</h1>
-            <div class="header-controls">
+            Contacts
+            <div class="nav-right">
                 <button id="logoutBtn" class="btn-secondary">Sign Out</button>
             </div>
         </div>
-        <div class="content">
+        <panel class="screen-panel content">
             <div class="collapsible-sections">
                 <div class="collapsible-section">
                     <button class="collapsible-toggle" id="togglePsm">Personal Message ▼</button>
@@ -98,28 +111,45 @@
                 </div>
             </div>
             <div id="contactList" class="contact-list"></div>
-        </div>
+        </panel>
     </div>
 
     <!-- Chat Screen -->
     <div id="chatScreen" class="screen" style="display:none;">
-        <div class="header">
-            <div class="header-controls-left">
+        <div class="navbar">
+            <div class="nav-left">
                 <button id="nudgeBtn" class="btn-small">Nudge</button>
             </div>
-            <h1 id="chatTitle">Chat</h1>
-            <div class="header-controls">
+            <span id="chatTitle">Chat</span>
+            <div class="nav-right">
                 <button id="closeChatBtn" class="btn-secondary">Close</button>
             </div>
         </div>
-        <div class="content chat-layout">
+        <panel class="screen-panel content chat-layout">
             <div id="messageContainer" class="message-container"></div>
             <div class="message-input-container">
                 <input type="text" id="messageInput" placeholder="Type a message and press Done/Enter..." maxlength="512">
             </div>
-        </div>
+        </panel>
     </div>
 
-    <script src="app.js"></script>
+    <script src="/app.js?v=20260418-6"></script>
+    <script>
+        var userAgent = window.navigator && window.navigator.userAgent ? window.navigator.userAgent : '';
+        if ( /(iPhone|iPad|iPod)/.test(userAgent) && /OS [1-5]_/.test(userAgent) && /Safari/.test(userAgent) ) {
+            alert("iMSNP requires iOS 6 or later. Please update your device to use this application.");
+            document.getElementById('loginBtn').disabled = true;
+            document.getElementById("loginBtn").textContent = "Unavailable";
+            document.getElementById('loginError').textContent = "DeviceUnsupported: iOS 6 or later is required.";
+            document.getElementById('loginError').style.display = 'block'; 
+
+            // Wait until page is loaded before removing login-ready class from loginBtn
+            window.addEventListener('load', function() {
+                document.getElementById('loginBtn').classList.remove('login-ready');
+            });
+
+        }
+    </script>
 </body>
 </html>
+
