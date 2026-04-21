@@ -786,6 +786,16 @@ optgroup {
   padding: 6px 8px;
 }
 
+#editContactsBtn,
+#removeContactsBtn {
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
+#removeContactsBtn {
+  margin-left: 6px;
+}
+
 .navbar button {
   background: -webkit-linear-gradient(top, #fefefe, #d7dde5);
   background: linear-gradient(to bottom, #fefefe, #d7dde5);
@@ -800,7 +810,8 @@ optgroup {
   padding: 6px 8px;
 }
 
-.navbar select {
+.navbar select,
+.settings-row.select-row select.status-select {
   width: 107px;
   max-width: 107px;
   background: -webkit-linear-gradient(top, #ffffff, #e5e9ef);
@@ -812,6 +823,21 @@ optgroup {
   height: 24px;
   padding: 0 8px;
   -webkit-appearance: menulist;
+}
+
+.settings-row.select-row label {
+  display: block;
+  float: left;
+  width: 34%;
+  line-height: 34px;
+  font-weight: bold;
+  color: #243b59;
+}
+
+.settings-row.select-row select.status-select {
+  float: right;
+  max-width: none;
+  margin: 5px;
 }
 
 #chatScreen .navbar {
@@ -1087,7 +1113,8 @@ optgroup {
 }
 
 .collapsible-sections {
-  margin: 9px;
+  margin: 9px auto 9px auto;
+  max-width: 500px;
 }
 
 .collapsible-section + .collapsible-section {
@@ -1138,7 +1165,8 @@ optgroup {
 .collapsible-content input {
   display: block;
   float: left;
-  width: 74%;
+  width: -webkit-calc(100% - 72px);
+  width: calc(100% - 72px);
   border: 1px solid #999;
   border-radius: 7px;
   padding: 7px 8px;
@@ -1150,8 +1178,7 @@ optgroup {
 .collapsible-content .btn-small {
   display: block;
   float: right;
-  width: 24%;
-  min-width: 64px;
+  width: 64px;
   height: 34px;
   line-height: 32px;
   text-align: center;
@@ -1162,6 +1189,47 @@ optgroup {
   background: linear-gradient(to bottom, #fefefe, #d8dee7);
   color: #1d3552;
   font-weight: bold;
+}
+
+.profile-readout {
+  margin-bottom: 9px;
+  border: 1px solid #c4ccd7;
+  border-radius: 7px;
+  background: #f7f9fc;
+  padding: 7px 8px;
+}
+
+.profile-row {
+  color: #243b59;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.profile-row + .profile-row {
+  margin-top: 4px;
+}
+
+.profile-label {
+  font-weight: bold;
+}
+
+.profile-value-empty {
+  color: #717f93;
+  font-style: italic;
+}
+
+.settings-row {
+  margin-top: 8px;
+}
+
+.settings-row:after {
+  content: "";
+  display: block;
+  clear: both;
+}
+
+.settings-row:first-child {
+  margin-top: 0;
 }
 
 .contact-list {
@@ -1192,6 +1260,30 @@ optgroup {
 .contact-item:active .contact-email,
 .contact-item:active .contact-psm {
   color: #fff;
+}
+
+.contact-item.edit-mode {
+  padding-left: 38px;
+}
+
+.contact-item.edit-mode .contact-select-indicator {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #8d9bb1;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.contact-item.edit-mode.selected {
+  background: #e8f0fb;
+}
+
+.contact-item.edit-mode.selected .contact-select-indicator {
+  background: #3f79cf;
+  border-color: #2f63aa;
 }
 
 .contact-item:last-child {
@@ -1242,8 +1334,8 @@ optgroup {
   border-radius: 9px;
   background: #fff;
   padding: 10px;
-  max-height: -webkit-calc(100vh - 66px);
-  max-height: calc(100vh - 66px);
+  min-height: -webkit-calc(100vh - 72px);
+  min-height: calc(100vh - 72px);
   display: -webkit-box;
   display: -webkit-flex;
   display: flex;

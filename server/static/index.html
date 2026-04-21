@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-title" content="iMSNP">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <title>iMSNP</title>
-    <link rel="stylesheet" href="saurik.css?v=8779042159">
+    <link rel="stylesheet" href="saurik.css?v=20260418-28">
     
 </head>
 <body class="pinstripe">
@@ -77,16 +77,8 @@
     <div id="mainScreen" class="screen" style="display:none;">
         <div class="navbar">
             <div class="nav-left">
-                <select id="statusSelect" class="status-select">
-                    <option value="Online">Online</option>
-                    <option value="Busy">Busy</option>
-                    <option value="Away">Away</option>
-                    <option value="BeRightBack">Be Right Back</option>
-                    <option value="OnThePhone">On The Phone</option>
-                    <option value="OutToLunch">Out To Lunch</option>
-                    <option value="Idle">Idle</option>
-                    <option value="Invisible">Invisible</option>
-                </select>
+                <button id="editContactsBtn" class="btn-secondary">Edit</button>
+                <button id="removeContactsBtn" class="btn-secondary" style="display:none;">Remove</button>
             </div>
             Contacts
             <div class="nav-right">
@@ -96,17 +88,44 @@
         <panel class="screen-panel content">
             <div class="collapsible-sections">
                 <div class="collapsible-section">
-                    <button class="collapsible-toggle" id="togglePsm">Personal Message ▼</button>
-                    <div class="collapsible-content" id="psmSection" style="display:none;">
-                        <input type="text" id="personalMessageInput" placeholder="Set personal message..." maxlength="48">
-                        <button id="setPsmBtn" class="btn-small">Set</button>
-                    </div>
-                </div>
-                <div class="collapsible-section">
-                    <button class="collapsible-toggle" id="toggleAddContact">Add Contact ▼</button>
-                    <div class="collapsible-content" id="addContactSection" style="display:none;">
-                        <input type="email" id="addContactInput" placeholder="Add contact email...">
-                        <button id="addContactBtn" class="btn-small">Add</button>
+                    <button class="collapsible-toggle" id="toggleSettings">Settings ▼</button>
+                    <div class="collapsible-content" id="settingsSection" style="display:none;">
+                        <div class="profile-readout">
+                            <div class="profile-row"><span class="profile-label">Email:</span> <span id="currentEmail" class="profile-value-empty">(not available)</span></div>
+                            <div class="profile-row"><span class="profile-label">Username:</span> <span id="currentDisplayName" class="profile-value-empty">(loading...)</span></div>
+                            <div class="profile-row"><span class="profile-label">Personal Message:</span> <span id="currentPersonalMessage" class="profile-value-empty">(none)</span></div>
+                        </div>
+                        <div class="settings-row select-row">
+                            <label for="statusSelect">Status</label>
+                            <select id="statusSelect" class="status-select">
+                                <option value="Online">Online</option>
+                                <option value="Busy">Busy</option>
+                                <option value="Away">Away</option>
+                                <option value="BeRightBack">Be Right Back</option>
+                                <option value="OnThePhone">On The Phone</option>
+                                <option value="OutToLunch">Out To Lunch</option>
+                                <option value="Idle">Idle</option>
+                                <option value="Invisible">Invisible</option>
+                            </select>
+                        </div>
+                        <div class="settings-row select-row">
+                            <label for="emoticonPackSelect">Emoticons</label>
+                            <select id="emoticonPackSelect" class="status-select">
+                                <option value="" disabled selected>Loading...</option>
+                            </select>
+                        </div>
+                        <div class="settings-row">
+                            <input type="text" id="displayNameInput" placeholder="Change username..." maxlength="129">
+                            <button id="setDisplayNameBtn" class="btn-small">Set</button>
+                        </div>
+                        <div class="settings-row">
+                            <input type="text" id="personalMessageInput" placeholder="Set personal message..." maxlength="129">
+                            <button id="setPsmBtn" class="btn-small">Set</button>
+                        </div>
+                        <div class="settings-row">
+                            <input type="email" id="addContactInput" placeholder="Add contact email...">
+                            <button id="addContactBtn" class="btn-small">Add</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -128,12 +147,12 @@
         <panel class="screen-panel content chat-layout">
             <div id="messageContainer" class="message-container"></div>
             <div class="message-input-container">
-                <input type="text" id="messageInput" placeholder="Text Message" maxlength="512">
+                <input type="text" id="messageInput" placeholder="Type a message and press Done/Enter..." maxlength="512">
             </div>
         </panel>
     </div>
 
-    <script src="/app.js?v=8779042159"></script>
+    <script src="/app.js?v=20260418-6"></script>
     <script>
         var userAgent = window.navigator && window.navigator.userAgent ? window.navigator.userAgent : '';
         if ( /(iPhone|iPad|iPod)/.test(userAgent) && /OS [1-5]_/.test(userAgent) && /Safari/.test(userAgent) ) {

@@ -8,6 +8,14 @@
     var conversationStates = {};
     var queuedMessages = {};
     var typingTimers = {};
+    var ownProfile = {
+        email: '',
+        displayName: '',
+        personalMessage: ''
+    };
+    var contactEditMode = false;
+    var selectedContactsForRemoval = {};
+    var contactRefreshTimer = null;
     var isRedirecting = false;
     var loginAttemptActive = false;
     var pendingLoginMessage = null;
@@ -61,6 +69,13 @@
     var statusSelect = document.getElementById('statusSelect');
     var reloadBtn = document.getElementById('reloadBtn');
     var logoutBtn = document.getElementById('logoutBtn');
+    var editContactsBtn = document.getElementById('editContactsBtn');
+    var removeContactsBtn = document.getElementById('removeContactsBtn');
+    var displayNameInput = document.getElementById('displayNameInput');
+    var setDisplayNameBtn = document.getElementById('setDisplayNameBtn');
+    var currentEmail = document.getElementById('currentEmail');
+    var currentDisplayName = document.getElementById('currentDisplayName');
+    var currentPersonalMessage = document.getElementById('currentPersonalMessage');
     var personalMessageInput = document.getElementById('personalMessageInput');
     var setPsmBtn = document.getElementById('setPsmBtn');
     var addContactInput = document.getElementById('addContactInput');
@@ -71,7 +86,167 @@
     var closeChatBtn = document.getElementById('closeChatBtn');
     var messageContainer = document.getElementById('messageContainer');
     var messageInput = document.getElementById('messageInput');
+    var emoticonPackSelect = document.getElementById('emoticonPackSelect');
     var customServiceRows = loginForm ? loginForm.querySelectorAll('.custom-service-row') : [];
+
+    // Emoticon data store
+    var emoticonData = null;
+    var emoticonCodes = []; // sorted by length, longest first
+    var emoticonBaseUrl = 'emoticons/default/';
+    var activeEmoticonPack = 'default';
+    var availableEmoticonPacks = []; // list of available pack metadata
+
+    function loadEmoticons(packName) {
+        var selectedPack = packName || activeEmoticonPack;
+        var jsonPath = 'emoticons/' + selectedPack + '/' + selectedPack + '.json';
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', jsonPath, true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    emoticonData = JSON.parse(xhr.responseText);
+                    if (!emoticonData || !emoticonData.emoticons) {
+                        emoticonData = { emoticons: {} };
+                    }
+                    // Extract and sort codes by length (longest first) to avoid partial matches
+                    emoticonCodes = Object.keys(emoticonData.emoticons || {})
+                        .sort(function(a, b) { return b.length - a.length; });
+                    activeEmoticonPack = selectedPack;
+                    emoticonBaseUrl = 'emoticons/' + activeEmoticonPack + '/';
+                    if (emoticonPackSelect) {
+                        emoticonPackSelect.value = activeEmoticonPack;
+                    }
+                    console.log('Emoticons loaded. Count:', emoticonCodes.length);
+                } catch (e) {
+                    emoticonData = { emoticons: {} };
+                    emoticonCodes = [];
+                    console.error('Failed to parse emoticon JSON:', e);
+                }
+            } else {
+                emoticonData = { emoticons: {} };
+                emoticonCodes = [];
+                console.error('Failed to load emoticons:', xhr.status);
+            }
+        };
+        xhr.onerror = function() {
+            emoticonData = { emoticons: {} };
+            emoticonCodes = [];
+            console.error('Error loading emoticons');
+        };
+        xhr.send();
+    }
+
+    function handleEmoticonPackChange() {
+        if (!emoticonPackSelect) return;
+        var selectedPack = (emoticonPackSelect.value || '').trim();
+        if (!selectedPack) return;
+        loadEmoticons(selectedPack);
+    }
+
+    function loadAvailableEmoticonPacks() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'emoticons/packs.json', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    availableEmoticonPacks = JSON.parse(xhr.responseText);
+                    if (!Array.isArray(availableEmoticonPacks)) {
+                        availableEmoticonPacks = [];
+                    }
+                    populateEmoticonPackDropdown();
+                    // After populating, load the default pack
+                    loadEmoticons('default');
+                    console.log('Available emoticon packs:', availableEmoticonPacks.length);
+                } catch (e) {
+                    console.error('Failed to parse packs.json:', e);
+                    // Fallback: load default without dropdown
+                    loadEmoticons('default');
+                }
+            } else {
+                console.error('Failed to load packs.json:', xhr.status);
+                // Fallback: load default without dropdown
+                loadEmoticons('default');
+            }
+        };
+        xhr.onerror = function() {
+            console.error('Error loading packs.json');
+            // Fallback: load default without dropdown
+            loadEmoticons('default');
+        };
+        xhr.send();
+    }
+
+    function populateEmoticonPackDropdown() {
+        if (!emoticonPackSelect) return;
+        // Clear existing options except the loading one
+        while (emoticonPackSelect.options.length > 1) {
+            emoticonPackSelect.remove(1);
+        }
+        // Remove the loading option
+        emoticonPackSelect.remove(0);
+        
+        // Add options for each available pack
+        for (var i = 0; i < availableEmoticonPacks.length; i++) {
+            var pack = availableEmoticonPacks[i];
+            var option = document.createElement('option');
+            option.value = pack.id;
+            option.textContent = pack.name;
+            if (pack.description) {
+                option.title = pack.description;
+            }
+            if (pack.id === 'default') {
+                option.selected = true;
+            }
+            emoticonPackSelect.appendChild(option);
+        }
+        console.log('Dropdown populated with', availableEmoticonPacks.length, 'packs');
+    }
+
+    function parseEmoticons(text) {
+        if (!emoticonData || !emoticonCodes || emoticonCodes.length === 0) {
+            return text; // Return plain text if emoticons not loaded
+        }
+
+        var container = document.createElement('span');
+        var remaining = text;
+        
+        while (remaining.length > 0) {
+            var matched = false;
+            
+            // Try to find a matching emoticon code at the start of remaining text
+            for (var i = 0; i < emoticonCodes.length; i++) {
+                var code = emoticonCodes[i];
+                if (remaining.indexOf(code) === 0) {
+                    var filename = emoticonData.emoticons[code];
+                    
+                    // Add emoticon image
+                    var img = document.createElement('img');
+                    img.src = emoticonBaseUrl + filename;
+                    img.alt = code;
+                    img.width = 32;
+                    img.height = 32;
+                    img.style.verticalAlign = 'middle';
+                    img.style.marginLeft = '2px';
+                    img.style.marginRight = '2px';
+                    container.appendChild(img);
+                    
+                    remaining = remaining.substring(code.length);
+                    matched = true;
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                // No emoticon found, add first character as text
+                var char = remaining.charAt(0);
+                var textNode = document.createTextNode(char);
+                container.appendChild(textNode);
+                remaining = remaining.substring(1);
+            }
+        }
+        
+        return container;
+    }
 
     function normalizeHostInput(rawValue) {
         var value = (rawValue || '').trim();
@@ -81,6 +256,136 @@
         value = value.replace(/\/.*$/, '');
         value = value.replace(/\s+/g, '');
         return value;
+    }
+
+    function queueContactListRefresh() {
+        if (contactRefreshTimer) {
+            clearTimeout(contactRefreshTimer);
+        }
+
+        contactRefreshTimer = setTimeout(function() {
+            updateContactList();
+            contactRefreshTimer = null;
+        }, 1000);
+    }
+
+    function getOwnDisplayNameForTitle() {
+        if (ownProfile.displayName && ownProfile.displayName.length) {
+            return ownProfile.displayName;
+        }
+        if (ownProfile.email && ownProfile.email.length) {
+            return ownProfile.email;
+        }
+        return 'User';
+    }
+
+    function updateWindowTitle() {
+        if (chatScreen && chatScreen.style.display !== 'none' && currentContact) {
+            var chatTarget = currentContact;
+            if (contacts[currentContact] && contacts[currentContact].displayName) {
+                chatTarget = cleanDisplayName(contacts[currentContact].displayName, 32);
+            }
+            document.title = 'Chatting with ' + chatTarget + ' - iMSNP';
+            return;
+        }
+
+        if (mainScreen && mainScreen.style.display !== 'none') {
+            document.title = 'Signed in as ' + getOwnDisplayNameForTitle() + ' - iMSNP';
+            return;
+        }
+
+        document.title = 'iMSNP';
+    }
+
+    function updateEditControls() {
+        if (!editContactsBtn || !removeContactsBtn) return;
+
+        if (!contactEditMode) {
+            editContactsBtn.textContent = 'Edit';
+            removeContactsBtn.style.display = 'none';
+            return;
+        }
+
+        editContactsBtn.textContent = 'Done';
+        removeContactsBtn.style.display = 'inline-block';
+
+        var selectedCount = 0;
+        for (var email in selectedContactsForRemoval) {
+            if (selectedContactsForRemoval.hasOwnProperty(email) && selectedContactsForRemoval[email]) {
+                selectedCount++;
+            }
+        }
+
+        removeContactsBtn.textContent = selectedCount > 0 ? ('Remove (' + selectedCount + ')') : 'Remove';
+    }
+
+    function setContactEditMode(enabled) {
+        contactEditMode = !!enabled;
+
+        if (!contactEditMode) {
+            selectedContactsForRemoval = {};
+        }
+
+        updateEditControls();
+        updateContactList();
+    }
+
+    function toggleContactSelection(email) {
+        if (!contactEditMode) return;
+
+        if (selectedContactsForRemoval[email]) {
+            delete selectedContactsForRemoval[email];
+        } else {
+            selectedContactsForRemoval[email] = true;
+        }
+
+        updateEditControls();
+        updateContactList();
+    }
+
+    function removeSelectedContacts() {
+        var toRemove = [];
+        var email;
+
+        for (email in selectedContactsForRemoval) {
+            if (selectedContactsForRemoval.hasOwnProperty(email) && selectedContactsForRemoval[email]) {
+                toRemove.push(email);
+            }
+        }
+
+        if (!toRemove.length) {
+            showStatus('Select contacts to remove first');
+            return;
+        }
+
+        var confirmed = true;
+        if (window && typeof window.confirm === 'function') {
+            confirmed = window.confirm('Remove ' + toRemove.length + ' contact' + (toRemove.length === 1 ? '' : 's') + ' from your list?');
+        }
+
+        if (!confirmed) {
+            return;
+        }
+
+        for (var i = 0; i < toRemove.length; i++) {
+            email = toRemove[i];
+
+            sendMessage({
+                type: 'removeContact',
+                email: email
+            });
+
+            delete contacts[email];
+            delete conversations[email];
+            delete conversationStates[email];
+            delete queuedMessages[email];
+            delete typingTimers[email];
+        }
+
+        setContactEditMode(false);
+        updateContactList();
+        queueContactListRefresh();
+        showStatus('Removing ' + toRemove.length + ' contact' + (toRemove.length === 1 ? '' : 's') + '...');
     }
 
     function buildServiceUrl(hostInput, pathSuffix, forceHttp) {
@@ -265,6 +570,9 @@
             case 'personalMessageUpdate':
                 handlePersonalMessageUpdate(message);
                 break;
+            case 'displayName':
+                handleDisplayNameUpdate(message.display_name);
+                break;
             case 'contactOffline':
                 handleContactOffline(message.email);
                 break;
@@ -329,6 +637,11 @@
         console.log('[CLIENT_LOGIN] Nexus URL:', nexusUrl);
         console.log('[CLIENT_LOGIN] Config Server:', configServer || '(none)');
         console.log('[CLIENT_LOGIN] Force HTTP:', forceHttp);
+
+        ownProfile.email = email;
+        ownProfile.displayName = '';
+        ownProfile.personalMessage = '';
+        renderOwnProfile();
         
         if (!email || !password || !server || !port || !nexusUrl || !configServer) {
             console.error('[CLIENT_LOGIN] Validation failed - missing required fields');
@@ -422,10 +735,12 @@
         loginBtn.innerHTML = 'Signed in!';
         hideError();
         showStatus('Signed in successfully!');
+        renderOwnProfile();
         
         setTimeout(function() {
             loginScreen.style.display = 'none';
             mainScreen.style.display = 'block';
+            updateWindowTitle();
             // Adjust contact list height after screen is shown
             setTimeout(adjustContactListHeight, 50);
         }, 500);
@@ -456,10 +771,55 @@
     }
     
     function handlePersonalMessageUpdate(update) {
+        if (update.email === getUserEmail()) {
+            ownProfile.personalMessage = update.message || '';
+            renderOwnProfile();
+        }
+
         if (contacts[update.email]) {
             contacts[update.email].personalMessage = update.message;
             updateContactList();
         }
+    }
+
+    function handleDisplayNameUpdate(displayName) {
+        ownProfile.displayName = displayName || '';
+        renderOwnProfile();
+        updateWindowTitle();
+    }
+
+    function renderOwnProfile() {
+        if (currentEmail) {
+            if (ownProfile.email && ownProfile.email.length) {
+                currentEmail.textContent = ownProfile.email;
+                removeClass(currentEmail, 'profile-value-empty');
+            } else {
+                currentEmail.textContent = '(not available)';
+                addClass(currentEmail, 'profile-value-empty');
+            }
+        }
+
+        if (currentDisplayName) {
+            if (ownProfile.displayName && ownProfile.displayName.length) {
+                currentDisplayName.textContent = ownProfile.displayName;
+                removeClass(currentDisplayName, 'profile-value-empty');
+            } else {
+                currentDisplayName.textContent = '(not available)';
+                addClass(currentDisplayName, 'profile-value-empty');
+            }
+        }
+
+        if (currentPersonalMessage) {
+            if (ownProfile.personalMessage && ownProfile.personalMessage.length) {
+                currentPersonalMessage.textContent = ownProfile.personalMessage;
+                removeClass(currentPersonalMessage, 'profile-value-empty');
+            } else {
+                currentPersonalMessage.textContent = '(none)';
+                addClass(currentPersonalMessage, 'profile-value-empty');
+            }
+        }
+
+        updateWindowTitle();
     }
     
     function handleContactOffline(email) {
@@ -474,6 +834,11 @@
     }
     
     function handleRemovedBy(email) {
+        if (contacts[email]) {
+            delete contacts[email];
+            updateContactList();
+            queueContactListRefresh();
+        }
         showStatus(email + ' removed you from their contact list');
     }
     
@@ -584,10 +949,12 @@
             mainScreen.style.display = 'block';
             adjustContactListHeight();
             currentContact = null;
+            updateWindowTitle();
             return;
         }
 
         showStatus(reason);
+        updateWindowTitle();
     }
     
     function updateContactList() {
@@ -620,6 +987,9 @@
     function createContactItem(contact) {
         var item = document.createElement('div');
         item.className = 'contact-item';
+        if (contactEditMode) {
+            item.className += ' edit-mode';
+        }
         
         var statusIndicator = document.createElement('div');
         statusIndicator.className = 'contact-status ' + getStatusClass(contact.status);
@@ -645,10 +1015,24 @@
             info.appendChild(psm);
         }
         
+        if (contactEditMode) {
+            var selectIndicator = document.createElement('div');
+            selectIndicator.className = 'contact-select-indicator';
+            item.appendChild(selectIndicator);
+
+            if (selectedContactsForRemoval[contact.email]) {
+                item.className += ' selected';
+            }
+        }
+
         item.appendChild(statusIndicator);
         item.appendChild(info);
         
         item.onclick = function() {
+            if (contactEditMode) {
+                toggleContactSelection(contact.email);
+                return;
+            }
             startConversation(contact.email);
         };
         
@@ -760,6 +1144,7 @@
         
         mainScreen.style.display = 'none';
         chatScreen.style.display = 'block';
+        updateWindowTitle();
         messageInput.focus();
         scrollToBottom();
     }
@@ -792,7 +1177,15 @@
         }
         
         var text = document.createElement('div');
-        text.textContent = message.text;
+        var parsed = parseEmoticons(message.text);
+        if (typeof parsed === 'string') {
+            text.textContent = parsed;
+        } else {
+            // parsed is a container with mixed text nodes and img elements
+            while (parsed.firstChild) {
+                text.appendChild(parsed.firstChild);
+            }
+        }
         bubble.appendChild(text);
         console.log('Message text:', message.text);
         
@@ -901,6 +1294,7 @@
         currentContact = null;
         chatScreen.style.display = 'none';
         mainScreen.style.display = 'block';
+        updateWindowTitle();
         adjustContactListHeight();
     }
     
@@ -920,7 +1314,27 @@
             type: 'setPersonalMessage',
             message: message
         });
+        ownProfile.personalMessage = message;
+        renderOwnProfile();
         personalMessageInput.value = '';
+    }
+
+    function handleSetDisplayName() {
+        var displayName = displayNameInput ? displayNameInput.value.trim() : '';
+        if (!displayName) {
+            showStatus('Username cannot be empty');
+            return;
+        }
+
+        sendMessage({
+            type: 'setDisplayName',
+            display_name: displayName
+        });
+
+        ownProfile.displayName = displayName;
+        renderOwnProfile();
+        displayNameInput.value = '';
+        showStatus('Username updated');
     }
     
     function handleAddContact() {
@@ -932,6 +1346,19 @@
             type: 'addContact',
             email: email
         });
+
+        if (!contacts[email]) {
+            contacts[email] = {
+                email: email,
+                displayName: email,
+                status: 'Offline',
+                personalMessage: '',
+                lists: ['ForwardList'],
+                groups: []
+            };
+            updateContactList();
+        }
+        queueContactListRefresh();
         
         addContactInput.value = '';
         showStatus('Contact request sent');
@@ -945,6 +1372,8 @@
         contacts = {};
         conversations = {};
         currentContact = null;
+        setContactEditMode(false);
+        updateWindowTitle();
         
         ws.close();
         
@@ -1027,6 +1456,9 @@
         }
     }
     
+    // Load available packs and default emoticons on app start
+    loadAvailableEmoticonPacks();
+    
     // Event listeners
     loginForm.addEventListener('submit', handleLogin);
     loginBtn.addEventListener('click', handleLogin);
@@ -1041,10 +1473,24 @@
     if (serviceSelect) {
         serviceSelect.addEventListener('change', updateServiceFieldsVisibility);
     }
+    if (emoticonPackSelect) {
+        emoticonPackSelect.addEventListener('change', handleEmoticonPackChange);
+    }
     if (reloadBtn) {
         reloadBtn.addEventListener('click', handleReload);
     }
+    if (editContactsBtn) {
+        editContactsBtn.addEventListener('click', function() {
+            setContactEditMode(!contactEditMode);
+        });
+    }
+    if (removeContactsBtn) {
+        removeContactsBtn.addEventListener('click', removeSelectedContacts);
+    }
     logoutBtn.addEventListener('click', handleLogout);
+    if (setDisplayNameBtn) {
+        setDisplayNameBtn.addEventListener('click', handleSetDisplayName);
+    }
     setPsmBtn.addEventListener('click', handleSetPsm);
     addContactBtn.addEventListener('click', handleAddContact);
     nudgeBtn.addEventListener('click', handleNudgeBtn);
@@ -1059,37 +1505,19 @@
     });
     
     // Collapsible section toggles
-    var togglePsm = document.getElementById('togglePsm');
-    var toggleAddContact = document.getElementById('toggleAddContact');
-    var psmSection = document.getElementById('psmSection');
-    var addContactSection = document.getElementById('addContactSection');
-    
-    if (togglePsm && psmSection) {
-        togglePsm.addEventListener('click', function() {
-            var section = togglePsm.parentNode;
-            if (psmSection.style.display === 'none') {
-                psmSection.style.display = 'block';
-                togglePsm.textContent = 'Personal Message ▲';
+    var toggleSettings = document.getElementById('toggleSettings');
+    var settingsSection = document.getElementById('settingsSection');
+
+    if (toggleSettings && settingsSection) {
+        toggleSettings.addEventListener('click', function() {
+            var section = toggleSettings.parentNode;
+            if (settingsSection.style.display === 'none') {
+                settingsSection.style.display = 'block';
+                toggleSettings.textContent = 'Settings ▲';
                 if (section && section.classList) section.classList.add('open');
             } else {
-                psmSection.style.display = 'none';
-                togglePsm.textContent = 'Personal Message ▼';
-                if (section && section.classList) section.classList.remove('open');
-            }
-            adjustContactListHeight();
-        });
-    }
-    
-    if (toggleAddContact && addContactSection) {
-        toggleAddContact.addEventListener('click', function() {
-            var section = toggleAddContact.parentNode;
-            if (addContactSection.style.display === 'none') {
-                addContactSection.style.display = 'block';
-                toggleAddContact.textContent = 'Add Contact ▲';
-                if (section && section.classList) section.classList.add('open');
-            } else {
-                addContactSection.style.display = 'none';
-                toggleAddContact.textContent = 'Add Contact ▼';
+                settingsSection.style.display = 'none';
+                toggleSettings.textContent = 'Settings ▼';
                 if (section && section.classList) section.classList.remove('open');
             }
             adjustContactListHeight();
@@ -1105,6 +1533,15 @@
             e.preventDefault();
         }
     });
+
+    if (displayNameInput) {
+        displayNameInput.addEventListener('keypress', function(e) {
+            if (e.keyCode === 13) {
+                handleSetDisplayName();
+                e.preventDefault();
+            }
+        });
+    }
     
     addContactInput.addEventListener('keypress', function(e) {
         if (e.keyCode === 13) {
@@ -1197,6 +1634,9 @@
     }
     
     // Init
+    renderOwnProfile();
+    updateEditControls();
+    updateWindowTitle();
     updateServiceFieldsVisibility();
     updateLoginButtonState();
     adjustContactListHeight();
