@@ -166,7 +166,8 @@
             window.addEventListener('load', function() {
                 document.getElementById('loginBtn').classList.remove('login-ready');
             });
-
+        } else if ( /MSIE|Trident|Opera Mini/.test(userAgent) ) { // Detection for IE and Opera Mini since they are known to break the CSS.
+            alert("Unsupported browser detected, iMSNP was designed with iOS WebKit in mind. Proceed with caution.");
         }
     </script>
 </body>
